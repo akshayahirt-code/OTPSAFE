@@ -77,6 +77,8 @@ fun SmsMessageListScreen(
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
+    var showGitHubReleaseDialog by remember { mutableStateOf(false) }
+
     // Filter messages according to selected category
     val filteredMessages = remember(allMessages, selectedCategory) {
         when (selectedCategory) {
@@ -159,22 +161,44 @@ fun SmsMessageListScreen(
                         )
                     }
 
-                    // Quick Simulation Icon Button
-                    IconButton(
-                        onClick = {
-                            viewModel.triggerSimulatedAnySms()
-                            Toast.makeText(context, "New SMS arrived!", Toast.LENGTH_SHORT).show()
-                        },
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .background(SafePrimary.copy(alpha = 0.1f))
-                            .testTag("quick_simulate_sms_button")
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.AddComment,
-                            contentDescription = "Simulate SMS",
-                            tint = SafePrimary
-                        )
+                        // GitHub Releases Download Link Button
+                        IconButton(
+                            onClick = { showGitHubReleaseDialog = true },
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(SafePrimary.copy(alpha = 0.12f))
+                                .border(1.dp, SafePrimary.copy(alpha = 0.3f), CircleShape)
+                                .testTag("sms_list_github_releases_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CloudDownload,
+                                contentDescription = "GitHub Releases",
+                                tint = SafePrimary
+                            )
+                        }
+
+                        // Quick Simulation Icon Button
+                        IconButton(
+                            onClick = {
+                                viewModel.triggerSimulatedAnySms()
+                                Toast.makeText(context, "New SMS arrived!", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(SecureEmerald.copy(alpha = 0.12f))
+                                .border(1.dp, SecureEmerald.copy(alpha = 0.3f), CircleShape)
+                                .testTag("quick_simulate_sms_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AddComment,
+                                contentDescription = "Simulate SMS",
+                                tint = SecureEmerald
+                            )
+                        }
                     }
                 }
 
