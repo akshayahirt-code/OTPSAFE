@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- High-Fidelity Custom Gilded Cyber Shield -->
+    <path
+        android:fillColor="#00E676"
+        android:pathData="M54,20 L27,29 L27,53 C27,72.4 38.6,89 54,95 C69.4,89 81,72.4 81,53 L81,29 Z" />
+    <!-- Tactile Inner Padlock Core -->
+    <path
+        android:fillColor="#090D13"
+        android:pathData="M54,38 C49.5,38 45.8,41.7 45.8,46.2 L45.8,51 L42,51 L42,72 L66,72 L66,51 L62.2,51 L62.2,46.2 C62.2,41.7 58.5,38 54,38 Z M54,41.5 C56.5,41.5 58.5,43.5 58.5,46.2 L58.5,51 L49.5,51 L49.5,46.2 C49.5,43.5 51.5,41.5 54,41.5 Z" />
+</vector>

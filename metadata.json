@@ -1,0 +1,6 @@
+{
+  "name": "OTPSecure",
+  "description": "Secure SMS Messaging Client & Private Cryptographic OTP Vault with auto-purging logic.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
