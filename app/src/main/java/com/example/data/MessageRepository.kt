@@ -1,5 +1,6 @@
 package com.example.data
 
+import android.content.Context
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
 import java.security.MessageDigest
@@ -65,6 +66,53 @@ class MessageRepository(private val messageDao: MessageDao) {
             isVaultMessage = isVaultMessage
         )
         return messageDao.insertMessage(message)
+    }
+
+    /**
+     * Reads device SMS history from Telephony Content Provider and syncs into the database.
+     * Extracts OTPs and auto-categorizes bank and sensitive alerts into the secure vault.
+     */
+    suspend fun syncDeviceSmsHistory(context: Context): Int {
+        val deviceMessages = SmsManagerHelper.readDeviceSmsHistory(context)
+        if (deviceMessages.isEmpty()) return 0
+
+        val currentMessages = normalMessages.firstOrNull() ?: emptyList()
+        val currentVault = vaultMessages.firstOrNull() ?: emptyList()
+        val existingKeys = (currentMessages + currentVault).map { "${it.sender}_${it.timestamp}_${it.body.take(20)}" }.toSet()
+
+        var importedCount = 0
+        val otpKeywords = listOf("otp", "code", "verification", "one-time", "verifikasi", "password", "pin")
+        val bankKeywords = listOf("debited", "credited", "withdrawn", "spent", "bank", "transferred", "txid", "transaction", "bal:", "balance", "rs.", "inr")
+        val digitsRegex = Regex("\\b\\d{4,8}\\b")
+
+        for (sms in deviceMessages) {
+            val key = "${sms.sender}_${sms.timestamp}_${sms.body.take(20)}"
+            if (!existingKeys.contains(key)) {
+                val lowerBody = sms.body.lowercase()
+
+                val hasOtpKeyword = otpKeywords.any { lowerBody.contains(it) }
+                val digitsMatch = digitsRegex.find(sms.body)
+                val isOtpDetected = hasOtpKeyword && digitsMatch != null
+                val extractedOtp = if (isOtpDetected) digitsMatch?.value else null
+
+                val isBankDetected = bankKeywords.any { lowerBody.contains(it) }
+                val isVaultMessage = isOtpDetected || isBankDetected
+
+                val entity = MessageEntity(
+                    threadId = sms.threadId,
+                    sender = sms.sender,
+                    body = sms.body,
+                    timestamp = sms.timestamp,
+                    isFromMe = sms.isFromMe,
+                    isOtp = isOtpDetected,
+                    otpCode = extractedOtp,
+                    isVaultMessage = isVaultMessage
+                )
+                messageDao.insertMessage(entity)
+                importedCount++
+            }
+        }
+        return importedCount
     }
 
     suspend fun markAsSpam(threadId: String) {

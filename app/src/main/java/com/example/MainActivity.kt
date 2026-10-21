@@ -1,10 +1,17 @@
 package com.example
 
+import android.Manifest
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import com.example.data.SmsManagerHelper
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
@@ -51,6 +58,8 @@ import com.example.data.MessageEntity
 import com.example.ui.ConversationThread
 import com.example.ui.MessageViewModel
 import com.example.ui.SmsMessageListScreen
+import com.example.ui.GitHubReleaseDownloadDialog
+import com.example.ui.NewMessageDialog
 import com.example.ui.theme.OTPSecureTheme
 import com.example.ui.theme.*
 import kotlinx.coroutines.delay
@@ -107,49 +116,56 @@ fun OtpSecureApp(viewModel: MessageViewModel = viewModel()) {
         }
     }
 
-    // Step 1: App Launch -> Default SMS Package Authorization Check
+    // Real SMS Permission Request Flow via ActivityResultContracts
+    val smsPermissionsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val readGranted = permissions[Manifest.permission.READ_SMS] == true
+        viewModel.onSmsPermissionsResult(readGranted, context) { count ->
+            if (readGranted) {
+                Toast.makeText(
+                    context,
+                    if (count > 0) "SMS permissions granted! Synced $count messages from history." else "SMS permissions granted! Message history ready.",
+                    Toast.LENGTH_LONG
+                ).show()
+            } else {
+                Toast.makeText(
+                    context,
+                    "SMS read permission denied. Real message history requires permission.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+    // Step 1: App Launch -> SMS Authorization Check
     if (isSmsAuthorized == null) {
         SmsAuthGateScreen(
             onChooseDefault = {
-                showSystemDialogSim = true
+                smsPermissionsLauncher.launch(SmsManagerHelper.REQUIRED_SMS_PERMISSIONS)
             },
             onChooseSandbox = {
                 viewModel.setSmsAuthorized(true)
                 Toast.makeText(context, "Continuing in Secure Sandbox Mode", Toast.LENGTH_SHORT).show()
             }
         )
-
-        // System default intent dialogues simulator
-        if (showSystemDialogSim) {
-            SystemSmsDialogSimulator(
-                onSetAsDefault = {
-                    showSystemDialogSim = false
-                    viewModel.setSmsAuthorized(true)
-                    Toast.makeText(context, "OTPSecure authorized successfully", Toast.LENGTH_SHORT).show()
-                },
-                onCancel = {
-                    showSystemDialogSim = false
-                    viewModel.setSmsAuthorized(false)
-                }
-            )
-        }
     } else if (!isSmsAuthorized!!) {
-        // Handle Denied Path -> Displays beautiful customized state where they can retry
-        SmsDeniedScreen {
-            showSystemDialogSim = true
-        }
-
-        if (showSystemDialogSim) {
-            SystemSmsDialogSimulator(
-                onSetAsDefault = {
-                    showSystemDialogSim = false
-                    viewModel.setSmsAuthorized(true)
-                },
-                onCancel = {
-                    showSystemDialogSim = false
+        // Handle Denied Path -> Displays customized state where user can retry or adjust settings
+        SmsDeniedScreen(
+            onRetry = {
+                smsPermissionsLauncher.launch(SmsManagerHelper.REQUIRED_SMS_PERMISSIONS)
+            },
+            onOpenSettings = {
+                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", context.packageName, null)
                 }
-            )
-        }
+                context.startActivity(intent)
+            },
+            onContinueSandbox = {
+                viewModel.setSmsAuthorized(true)
+                Toast.makeText(context, "Continuing in Secure Sandbox Mode", Toast.LENGTH_SHORT).show()
+            }
+        )
     } else {
         // Main Stack View Switcher
         Box(modifier = Modifier.fillMaxSize()) {
@@ -353,9 +369,9 @@ fun SmsAuthGateScreen(
             colors = ButtonDefaults.buttonColors(containerColor = SafePrimary),
             shape = RoundedCornerShape(16.dp)
         ) {
-            Icon(imageVector = Icons.Default.Lock, contentDescription = "Shield")
+            Icon(imageVector = Icons.Default.Sms, contentDescription = "SMS Permission")
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Set Primary SMS Handler", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text("Grant SMS Permissions & Access History", fontWeight = FontWeight.Bold, fontSize = 16.sp)
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -367,7 +383,7 @@ fun SmsAuthGateScreen(
                 .height(56.dp)
                 .testTag("auth_sandbox_btn")
         ) {
-            Text("Simulate Sandbox Environment", color = SecureEmerald, fontWeight = FontWeight.Bold)
+            Text("Continue with Offline Sandbox", color = SecureEmerald, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -445,7 +461,9 @@ fun SystemSmsDialogSimulator(
 
 @Composable
 fun SmsDeniedScreen(
-    onRetry: () -> Unit
+    onRetry: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onContinueSandbox: () -> Unit
 ) {
     val isDark = isSystemInDarkTheme()
     val ObsidianBg = if (isDark) ObsidianBgDark else ObsidianBgLight
@@ -458,7 +476,8 @@ fun SmsDeniedScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(ObsidianBg)
-            .padding(24.dp),
+            .padding(24.dp)
+            .windowInsetsPadding(WindowInsets.safeDrawing),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -472,7 +491,7 @@ fun SmsDeniedScreen(
         Spacer(modifier = Modifier.height(24.dp))
 
         Text(
-            text = "Authorization Required",
+            text = "SMS Permission Required",
             style = MaterialTheme.typography.titleLarge,
             color = LightText,
             fontWeight = FontWeight.Bold
@@ -481,7 +500,7 @@ fun SmsDeniedScreen(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "To keep your bank statements and authentication PIN codes filtered correctly, OTPSecure requires permission to read device text transmission channels. Please re-trigger the default intent dialog.",
+            text = "To access device message history, auto-detect verification OTPs, and protect your accounts in the local secure vault, OTPSecure needs SMS read and receive permissions.",
             style = MaterialTheme.typography.bodyMedium,
             color = MutedText,
             textAlign = TextAlign.Center
@@ -493,10 +512,42 @@ fun SmsDeniedScreen(
             onClick = onRetry,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(50.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = SafePrimary)
+                .height(52.dp)
+                .testTag("sms_denied_grant_permission_btn"),
+            colors = ButtonDefaults.buttonColors(containerColor = SafePrimary),
+            shape = RoundedCornerShape(14.dp)
         ) {
-            Text("Re-Auth SMS Package", fontWeight = FontWeight.Bold)
+            Icon(imageVector = Icons.Default.Sms, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Grant SMS Permissions", fontWeight = FontWeight.Bold)
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OutlinedButton(
+            onClick = onOpenSettings,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+                .testTag("sms_denied_open_settings_btn"),
+            border = BorderStroke(1.dp, ObsidianBorder),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Icon(imageVector = Icons.Default.Settings, contentDescription = null, tint = LightText)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Open App Settings", color = LightText, fontWeight = FontWeight.SemiBold)
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        TextButton(
+            onClick = onContinueSandbox,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .testTag("sms_denied_sandbox_btn")
+        ) {
+            Text("Continue in Offline Sandbox Mode", color = SecureEmerald, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -523,6 +574,9 @@ fun InboxScreen(
     val threads by viewModel.inboxThreads.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val context = LocalContext.current
+
+    var showGitHubReleaseDialog by remember { mutableStateOf(false) }
+    var showNewMessageDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -552,6 +606,50 @@ fun InboxScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        // Sync Device SMS History
+                        IconButton(
+                            onClick = {
+                                if (SmsManagerHelper.hasReadSmsPermission(context)) {
+                                    viewModel.syncDeviceSmsHistory(context) { count ->
+                                        Toast.makeText(
+                                            context,
+                                            if (count > 0) "Synced $count messages from history" else "SMS history is up to date",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                } else {
+                                    Toast.makeText(context, "Please grant SMS permission from the Cards view", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(SafePrimary.copy(alpha = 0.1f))
+                                .border(1.dp, SafePrimary.copy(alpha = 0.3f), CircleShape)
+                                .testTag("inbox_sync_sms_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Sync,
+                                contentDescription = "Sync SMS History",
+                                tint = SafePrimary
+                            )
+                        }
+
+                        // GitHub Releases Download Link Button
+                        IconButton(
+                            onClick = { showGitHubReleaseDialog = true },
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(SafePrimary.copy(alpha = 0.1f))
+                                .border(1.dp, SafePrimary.copy(alpha = 0.3f), CircleShape)
+                                .testTag("inbox_github_releases_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CloudDownload,
+                                contentDescription = "GitHub Releases",
+                                tint = SafePrimary
+                            )
+                        }
+
                         // Switch to SMS Cards View
                         IconButton(
                             onClick = onOpenSmsCards,
@@ -660,20 +758,18 @@ fun InboxScreen(
             }
         },
         floatingActionButton = {
-            // Simulator trigger
             ExtendedFloatingActionButton(
                 onClick = {
-                    viewModel.triggerSimulatedOtpArrival()
-                    Toast.makeText(context, "Simulated Secure SMS Intercepted!", Toast.LENGTH_SHORT).show()
+                    showNewMessageDialog = true
                 },
-                modifier = Modifier.testTag("simulate_otp_fab"),
-                containerColor = SecureEmerald,
-                contentColor = ObsidianBg,
+                modifier = Modifier.testTag("inbox_compose_sms_fab"),
+                containerColor = SafePrimary,
+                contentColor = Color.White,
                 shape = RoundedCornerShape(16.dp)
             ) {
-                Icon(imageVector = Icons.Default.Add, contentDescription = "Inbound Simulation")
+                Icon(imageVector = Icons.Default.Edit, contentDescription = "New Message")
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Simulate Log Arrival", fontWeight = FontWeight.Bold)
+                Text("New Message", fontWeight = FontWeight.Bold)
             }
         }
     ) { innerPadding ->
@@ -701,6 +797,26 @@ fun InboxScreen(
                 }
             }
         }
+    }
+
+    if (showGitHubReleaseDialog) {
+        GitHubReleaseDownloadDialog(
+            onDismissRequest = { showGitHubReleaseDialog = false }
+        )
+    }
+
+    if (showNewMessageDialog) {
+        NewMessageDialog(
+            onDismissRequest = { showNewMessageDialog = false },
+            onSendMessage = { recipient, body ->
+                showNewMessageDialog = false
+                viewModel.startNewConversationAndSend(recipient, body, context)
+                onSelectThread(
+                    recipient.trim().replace(" ", "_").lowercase(),
+                    recipient
+                )
+            }
+        )
     }
 }
 
@@ -897,7 +1013,7 @@ fun EmptyStateInbox(isFiltering: Boolean) {
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = if (isFiltering) "Try adjusting some query descriptors." else "Simulate some transactions or OTPs. OTPSecure automatically categorizes and isolates OTP codes.",
+            text = if (isFiltering) "Try adjusting some query descriptors." else "No messages found. Sync with your device SMS history or start a new conversation.",
             color = MutedText,
             fontSize = 13.sp,
             textAlign = TextAlign.Center
@@ -1503,6 +1619,7 @@ fun ChatScreen(
     
     var replyText by remember { mutableStateOf("") }
     var showOverflowMenu by remember { mutableStateOf(false) }
+    val context = LocalContext.current
     
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -1697,7 +1814,7 @@ fun ChatScreen(
                     IconButton(
                         onClick = {
                             if (replyText.isNotBlank()) {
-                                viewModel.sendDirectMessage(replyText)
+                                viewModel.sendDirectMessage(replyText, context)
                                 replyText = ""
                             }
                         },

@@ -24,6 +24,16 @@ class MessageViewModel(application: Application) : AndroidViewModel(application)
     private val _isSmsAuthorized = MutableStateFlow<Boolean?>(null) // null = not yet checked
     val isSmsAuthorized: StateFlow<Boolean?> = _isSmsAuthorized.asStateFlow()
 
+    // Real Device SMS Permission and Sync states
+    private val _isSmsPermissionGranted = MutableStateFlow(false)
+    val isSmsPermissionGranted: StateFlow<Boolean> = _isSmsPermissionGranted.asStateFlow()
+
+    private val _isSyncingSms = MutableStateFlow(false)
+    val isSyncingSms: StateFlow<Boolean> = _isSyncingSms.asStateFlow()
+
+    private val _syncStatusMessage = MutableStateFlow<String?>(null)
+    val syncStatusMessage: StateFlow<String?> = _syncStatusMessage.asStateFlow()
+
     // Search query
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
@@ -67,6 +77,14 @@ class MessageViewModel(application: Application) : AndroidViewModel(application)
             // Run Auto-Deletion clean up (72h Threshold)
             val purgedCount = repository.purgeOldOtps()
             android.util.Log.d("OTPSecure", "Auto-purged older OTP logs: $purgedCount accounts.")
+
+            // Check if SMS permission is already granted on app start
+            val hasPerm = SmsManagerHelper.hasReadSmsPermission(application)
+            _isSmsPermissionGranted.value = hasPerm
+            if (hasPerm) {
+                _isSmsAuthorized.value = true
+                repository.syncDeviceSmsHistory(application)
+            }
         }
     }
 
@@ -153,6 +171,49 @@ class MessageViewModel(application: Application) : AndroidViewModel(application)
         _isSmsAuthorized.value = authorized
     }
 
+    fun refreshPermissionState(context: android.content.Context) {
+        val granted = SmsManagerHelper.hasReadSmsPermission(context)
+        _isSmsPermissionGranted.value = granted
+        if (granted && _isSmsAuthorized.value != true) {
+            _isSmsAuthorized.value = true
+            syncDeviceSmsHistory(context)
+        }
+    }
+
+    fun onSmsPermissionsResult(granted: Boolean, context: android.content.Context, onComplete: ((Int) -> Unit)? = null) {
+        _isSmsPermissionGranted.value = granted
+        _isSmsAuthorized.value = granted
+        if (granted) {
+            syncDeviceSmsHistory(context, onComplete)
+        } else {
+            onComplete?.invoke(0)
+        }
+    }
+
+    fun syncDeviceSmsHistory(context: android.content.Context, onComplete: ((Int) -> Unit)? = null) {
+        viewModelScope.launch {
+            _isSyncingSms.value = true
+            try {
+                val count = repository.syncDeviceSmsHistory(context)
+                _isSyncingSms.value = false
+                _syncStatusMessage.value = if (count > 0) {
+                    "Synced $count messages from SMS history"
+                } else {
+                    "Device SMS history is up to date"
+                }
+                onComplete?.invoke(count)
+            } catch (e: Exception) {
+                _isSyncingSms.value = false
+                _syncStatusMessage.value = "Failed to sync SMS: ${e.message}"
+                onComplete?.invoke(0)
+            }
+        }
+    }
+
+    fun clearSyncStatusMessage() {
+        _syncStatusMessage.value = null
+    }
+
     // Security Pincode & Biometrics actions
     fun setVaultUnlocked(unlocked: Boolean) {
         _isVaultUnlocked.value = unlocked
@@ -231,42 +292,40 @@ class MessageViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    // Transmission Engine
-    fun sendDirectMessage(body: String) {
+    // Transmission Engine - Dispatches real SMS when SEND_SMS permission is granted and records in local secure store
+    fun sendDirectMessage(body: String, context: android.content.Context? = null) {
         val threadId = _activeThreadId.value ?: return
         val sender = _activeThreadSender.value
         if (body.isBlank()) return
 
+        val appContext = context ?: getApplication<Application>().applicationContext
+
         viewModelScope.launch {
+            val isPhoneNumber = sender.any { it.isDigit() }
+            if (isPhoneNumber && SmsManagerHelper.hasSendSmsPermission(appContext)) {
+                SmsManagerHelper.sendSmsMessage(appContext, sender, body)
+            }
+
             repository.sendMessage(threadId, sender, body)
-            
-            // To make the chat experience interactive, let's simulate a reply back after 1.5 seconds!
-            // If the message contains a question, reply with dynamic friendly responses
-            simulateAutoReply(sender, body)
         }
     }
 
-    private fun simulateAutoReply(sender: String, messageSent: String) {
+    /**
+     * Composes and sends a new SMS message to a recipient, creating or updating the conversation thread.
+     */
+    fun startNewConversationAndSend(recipient: String, body: String, context: android.content.Context? = null) {
+        if (recipient.isBlank() || body.isBlank()) return
+        val appContext = context ?: getApplication<Application>().applicationContext
+        val threadId = recipient.trim().replace(" ", "_").lowercase()
+
         viewModelScope.launch {
-            kotlinx.coroutines.delay(1500)
-            val threadId = sender.trim().replace(" ", "_").lowercase()
-            
-            // Determine a realistic reply context
-            val replyText = when {
-                messageSent.lowercase().contains("hello") || messageSent.lowercase().contains("hi") -> {
-                    "Hey there! This is a secure local simulation of $sender. Your data is protected."
-                }
-                messageSent.lowercase().contains("where") -> {
-                    "Just around! Doing some testing of OTPSECURE's encryption module."
-                }
-                messageSent.lowercase().contains("seat") || messageSent.lowercase().contains("kabir") -> {
-                    "Awesome. Reserved it!"
-                }
-                else -> {
-                    "Message received on OTPSECURE client. Synchronized with local SQLite storage."
-                }
+            val isPhoneNumber = recipient.any { it.isDigit() }
+            if (isPhoneNumber && SmsManagerHelper.hasSendSmsPermission(appContext)) {
+                SmsManagerHelper.sendSmsMessage(appContext, recipient, body)
             }
-            repository.receiveSimulatedMessage(sender, replyText)
+
+            repository.sendMessage(threadId, recipient, body)
+            selectThread(threadId, recipient)
         }
     }
 

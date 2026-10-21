@@ -1,8 +1,12 @@
 package com.example.ui
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.example.data.SmsManagerHelper
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -78,6 +82,39 @@ fun SmsMessageListScreen(
     val snackbarHostState = remember { SnackbarHostState() }
 
     var showGitHubReleaseDialog by remember { mutableStateOf(false) }
+    var showNewMessageDialog by remember { mutableStateOf(false) }
+
+    val isSmsPermissionGranted by viewModel.isSmsPermissionGranted.collectAsState()
+    val isSyncingSms by viewModel.isSyncingSms.collectAsState()
+
+    val smsPermissionsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val readGranted = permissions[Manifest.permission.READ_SMS] == true
+        viewModel.onSmsPermissionsResult(readGranted, context) { count ->
+            coroutineScope.launch {
+                if (readGranted) {
+                    val msg = if (count > 0) "Synced $count messages from SMS history" else "SMS permission granted! Ready to sync."
+                    snackbarHostState.showSnackbar(msg)
+                } else {
+                    snackbarHostState.showSnackbar("SMS permission denied. Cannot access message history.")
+                }
+            }
+        }
+    }
+
+    val requestOrSyncSmsHistory: () -> Unit = {
+        if (SmsManagerHelper.hasReadSmsPermission(context)) {
+            viewModel.syncDeviceSmsHistory(context) { count ->
+                coroutineScope.launch {
+                    val msg = if (count > 0) "Synced $count messages from SMS history" else "Device SMS history is up to date"
+                    snackbarHostState.showSnackbar(msg)
+                }
+            }
+        } else {
+            smsPermissionsLauncher.launch(SmsManagerHelper.REQUIRED_SMS_PERMISSIONS)
+        }
+    }
 
     // Filter messages according to selected category
     val filteredMessages = remember(allMessages, selectedCategory) {
@@ -165,6 +202,31 @@ fun SmsMessageListScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        // Access Device SMS History / Sync Button
+                        IconButton(
+                            onClick = requestOrSyncSmsHistory,
+                            enabled = !isSyncingSms,
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(SafePrimary.copy(alpha = 0.12f))
+                                .border(1.dp, SafePrimary.copy(alpha = 0.3f), CircleShape)
+                                .testTag("sms_list_sync_history_button")
+                        ) {
+                            if (isSyncingSms) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = SafePrimary
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Sync,
+                                    contentDescription = "Access Device SMS History",
+                                    tint = SafePrimary
+                                )
+                            }
+                        }
+
                         // GitHub Releases Download Link Button
                         IconButton(
                             onClick = { showGitHubReleaseDialog = true },
@@ -181,22 +243,19 @@ fun SmsMessageListScreen(
                             )
                         }
 
-                        // Quick Simulation Icon Button
+                        // Compose New Message Button
                         IconButton(
-                            onClick = {
-                                viewModel.triggerSimulatedAnySms()
-                                Toast.makeText(context, "New SMS arrived!", Toast.LENGTH_SHORT).show()
-                            },
+                            onClick = { showNewMessageDialog = true },
                             modifier = Modifier
                                 .clip(CircleShape)
-                                .background(SecureEmerald.copy(alpha = 0.12f))
-                                .border(1.dp, SecureEmerald.copy(alpha = 0.3f), CircleShape)
-                                .testTag("quick_simulate_sms_button")
+                                .background(SafePrimary.copy(alpha = 0.12f))
+                                .border(1.dp, SafePrimary.copy(alpha = 0.3f), CircleShape)
+                                .testTag("sms_list_new_message_button")
                         ) {
                             Icon(
-                                imageVector = Icons.Default.AddComment,
-                                contentDescription = "Simulate SMS",
-                                tint = SecureEmerald
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "New Message",
+                                tint = SafePrimary
                             )
                         }
                     }
@@ -332,25 +391,22 @@ fun SmsMessageListScreen(
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = {
-                    viewModel.triggerSimulatedAnySms()
-                    coroutineScope.launch {
-                        snackbarHostState.showSnackbar("Simulated SMS received & cataloged")
-                    }
+                    showNewMessageDialog = true
                 },
                 modifier = Modifier
                     .then(if (onOpenInbox == null) Modifier.navigationBarsPadding() else Modifier)
-                    .testTag("simulate_sms_fab"),
-                containerColor = SecureEmerald,
-                contentColor = Color.Black,
+                    .testTag("compose_sms_fab"),
+                containerColor = SafePrimary,
+                contentColor = Color.White,
                 shape = RoundedCornerShape(16.dp),
                 icon = {
                     Icon(
-                        imageVector = Icons.Default.Sms,
-                        contentDescription = "Add SMS"
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "New Message"
                     )
                 },
                 text = {
-                    Text("Simulate SMS", fontWeight = FontWeight.Bold)
+                    Text("New Message", fontWeight = FontWeight.Bold)
                 }
             )
         }
@@ -359,12 +415,14 @@ fun SmsMessageListScreen(
             EmptySmsMessagesState(
                 searchQuery = searchQuery,
                 category = selectedCategory,
+                isPermissionGranted = isSmsPermissionGranted,
+                onRequestPermission = requestOrSyncSmsHistory,
                 onClearFilter = {
                     viewModel.setSearchQuery("")
                     selectedCategory = SmsFilterCategory.ALL
                 },
-                onSimulate = {
-                    viewModel.triggerSimulatedAnySms()
+                onNewMessage = {
+                    showNewMessageDialog = true
                 },
                 modifier = Modifier
                     .fillMaxSize()
@@ -380,6 +438,64 @@ fun SmsMessageListScreen(
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 80.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                if (!isSmsPermissionGranted) {
+                    item(key = "permission_banner") {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("access_sms_history_banner"),
+                            shape = RoundedCornerShape(16.dp),
+                            color = SafePrimary.copy(alpha = 0.10f),
+                            border = BorderStroke(1.dp, SafePrimary.copy(alpha = 0.35f))
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = SafePrimary.copy(alpha = 0.2f),
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.Sms,
+                                                contentDescription = null,
+                                                tint = SafePrimary,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Access Device SMS History",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 15.sp,
+                                            color = primaryText
+                                        )
+                                        Text(
+                                            text = "Grant SMS permissions to import & categorize your device text messages.",
+                                            fontSize = 12.sp,
+                                            color = secondaryText
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Button(
+                                    onClick = requestOrSyncSmsHistory,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("banner_grant_sms_permission_btn"),
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = SafePrimary)
+                                ) {
+                                    Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Grant Permission & Sync SMS", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
                 items(
                     items = filteredMessages,
                     key = { it.id }
@@ -429,6 +545,26 @@ fun SmsMessageListScreen(
                 }
             }
         }
+    }
+
+    if (showGitHubReleaseDialog) {
+        GitHubReleaseDownloadDialog(
+            onDismissRequest = { showGitHubReleaseDialog = false }
+        )
+    }
+
+    if (showNewMessageDialog) {
+        NewMessageDialog(
+            onDismissRequest = { showNewMessageDialog = false },
+            onSendMessage = { recipient, body ->
+                showNewMessageDialog = false
+                viewModel.startNewConversationAndSend(recipient, body, context)
+                onNavigateToThread(
+                    recipient.trim().replace(" ", "_").lowercase(),
+                    recipient
+                )
+            }
+        )
     }
 }
 
@@ -741,8 +877,10 @@ fun SmsMessageCard(
 fun EmptySmsMessagesState(
     searchQuery: String,
     category: SmsFilterCategory,
+    isPermissionGranted: Boolean,
+    onRequestPermission: () -> Unit,
     onClearFilter: () -> Unit,
-    onSimulate: () -> Unit,
+    onNewMessage: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val isDark = isSystemInDarkTheme()
@@ -762,7 +900,7 @@ fun EmptySmsMessagesState(
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
-                    imageVector = Icons.Default.MarkChatUnread,
+                    imageVector = if (!isPermissionGranted) Icons.Default.Lock else Icons.Default.MarkChatUnread,
                     contentDescription = null,
                     tint = SafePrimary,
                     modifier = Modifier.size(36.dp)
@@ -773,7 +911,13 @@ fun EmptySmsMessagesState(
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = if (searchQuery.isNotEmpty()) "No matching messages" else "No ${category.label} found",
+            text = if (!isPermissionGranted) {
+                "SMS History Access Required"
+            } else if (searchQuery.isNotEmpty()) {
+                "No matching messages"
+            } else {
+                "No ${category.label} found"
+            },
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             color = primaryText
@@ -782,7 +926,9 @@ fun EmptySmsMessagesState(
         Spacer(modifier = Modifier.height(6.dp))
 
         Text(
-            text = if (searchQuery.isNotEmpty()) {
+            text = if (!isPermissionGranted) {
+                "Grant SMS permissions to access device message history and automatically detect verification OTPs."
+            } else if (searchQuery.isNotEmpty()) {
                 "Try searching for another keyword or check another filter category."
             } else {
                 "Incoming SMS messages in this category will be displayed in cards here."
@@ -794,24 +940,43 @@ fun EmptySmsMessagesState(
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (searchQuery.isNotEmpty() || category != SmsFilterCategory.ALL) {
-                OutlinedButton(
-                    onClick = onClearFilter,
-                    shape = RoundedCornerShape(12.dp)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            if (!isPermissionGranted) {
+                Button(
+                    onClick = onRequestPermission,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = SafePrimary),
+                    modifier = Modifier.testTag("empty_state_grant_permission_btn")
                 ) {
-                    Text("Clear Filter")
+                    Icon(Icons.Default.Sms, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Grant Permission & Load History")
                 }
             }
 
-            Button(
-                onClick = onSimulate,
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = SafePrimary)
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Receive Sample SMS")
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (searchQuery.isNotEmpty() || category != SmsFilterCategory.ALL) {
+                    OutlinedButton(
+                        onClick = onClearFilter,
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Clear Filter")
+                    }
+                }
+
+                Button(
+                    onClick = onNewMessage,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = if (!isPermissionGranted) ButtonDefaults.outlinedButtonColors() else ButtonDefaults.buttonColors(containerColor = SafePrimary),
+                    modifier = Modifier.testTag("empty_state_compose_btn")
+                ) {
+                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("New Message")
+                }
             }
         }
     }
